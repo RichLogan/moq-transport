@@ -519,32 +519,30 @@ to MoQT constraints. Such a Track is considered malformed.  Some example
 conditions that constitute a malformed track when detected by a receiver
 include:
 
-1. An Object is received on a Subgroup stream whose Object ID is not strictly
-   larger than the previous Object received on the same Subgroup.
-2. An Object is received in a FETCH response with the same Group as the
+1. An Object is received in a FETCH response with the same Group as the
    previous Object, but whose Object ID is not strictly larger than the previous
    object.
-3. An Object is received in an Ascending FETCH response whose Group ID is smaller
+2. An Object is received in an Ascending FETCH response whose Group ID is smaller
    than the previous Object in the response.
-4. An Object is received in a Descending FETCH response whose Group ID is larger
+3. An Object is received in a Descending FETCH response whose Group ID is larger
    than the previous Object in the resopnse.
-5. A Subgroup or FETCH response is terminated with a FIN in the middle of an
+4. A Subgroup or FETCH response is terminated with a FIN in the middle of an
    Object
-6. An Object is received whose Object ID is larger than the final Object in the
+5. An Object is received whose Object ID is larger than the final Object in the
    Subgroup.  The final Object in a Subgroup is the last Object received on a
    Subgroup stream before a FIN.
-7. A Subgroup is received with two or more different final Objects.
-8. An Object is received in a Group whose Object ID is larger than the final
+6. A Subgroup is received with two or more different final Objects.
+7. An Object is received in a Group whose Object ID is larger than the final
    Object in the Group.  The final Object in a Group is the Object with Status
    END_OF_GROUP or the last Object sent in a FETCH that requested the entire
    Group.
-9. An Object is received on a Track whose Group and Object ID are larger than the
+8. An Object is received on a Track whose Group and Object ID are larger than the
    final Object in the Track.  The final Object in a Track is the Object with
    Status END_OF_TRACK or the last Object sent in a FETCH whose response indicated
    End of Track.
-10. The same Object is received more than once with different Payload or
+9. The same Object is received more than once with different Payload or
     other immutable properties.
-11. An Object is received with a different Forwarding Preference than previously
+10. An Object is received with a different Forwarding Preference than previously
     observed from the same Track.
 
 The above list of conditions is not considered exhaustive.
@@ -623,11 +621,12 @@ application.
 
 The client can establish a connection to a MoQ server identified by a
 given URI by setting up a QUIC connection to the host and port
-identified by the `authority` section of the URI.  The `path-abempty`
-and `query` portions of the URI are communicated to the server using the
-PATH parameter ({{path}}) which is sent in the CLIENT_SETUP message at the
-start of the session.  The ALPN value {{!RFC7301}} used by the protocol
-is `moq-00`.
+identified by the `authority` section of the URI. The 'authority' is also
+transmitted to the server in the AUTHORITY parameter, ({{authority}}) which is
+sent in the CLIENT_SETUP message at the start of the session.  The
+`path-abempty` and `query` portions of the URI are similarly communicated to the
+server using the PATH parameter ({{path}}).  The ALPN value {{!RFC7301}} used by
+the protocol is `moq-00`.
 
 ### Connection URL
 
@@ -728,6 +727,10 @@ and SHOULD use a relevant code, as defined below:
 |------|---------------------------|
 | 0x18 | Expired Auth Token        |
 |------|---------------------------|
+| 0x19 | Invalid Authority         |
+|------|---------------------------|
+| 0x1A | Malformed Authority       |
+|------|---------------------------|
 
 * No Error: The session is being terminated without an error.
 
@@ -785,6 +788,11 @@ and SHOULD use a relevant code, as defined below:
   (see {{authorization-token}}).
 
 * Expired Auth Token - Authorization token has expired {{authorization-token}}).
+
+* Invalid Authority - The specified AUTHORITY does not correspond to this server
+  or cannot be used in this context.
+
+* Malformed Authority - The AUTHORITY value is syntactically invalid.
 
 An endpoint MAY choose to treat a subscription or request specific error as a
 session error under certain circumstances, closing the entire session in
@@ -1009,12 +1017,14 @@ congestion.
 MOQT maintains priorities between different _schedulable objects_.
 A schedulable object in MOQT is either:
 
-1. An object in response to a SUBSCRIBE that belongs to a subgroup where
-   that object is the next object in that subgroup.
-2. An object in response to a SUBSCRIBE that belongs to a track with
+1. The first or next Object in a Subgroup that is in response to a subscription.
+2. An Object in response to a subscription that belongs to a Track with
    delivery preference Datagram.
-3. An object in response to a FETCH where that object is the next
-   object in the response.
+3. An Object in response to a FETCH where that Object is the next
+   Object in the response.
+
+An Object is not schedulable if it is known that no part of it can be written
+due to underlying transport flow control limits.
 
 A single subgroup or datagram has a single publisher priority. Within a
 response to SUBSCRIBE, it can be useful to conceptualize this process as
@@ -1663,6 +1673,22 @@ number to 0xff000000. For example, draft-ietf-moq-transport-13 would be
 identified as 0xff00000D.
 
 ### Setup Parameters {#setup-params}
+
+#### AUTHORITY {#authority}
+
+The AUTHORITY parameter (Parameter Type 0x05) allows the client to specify the
+authority component of the MoQ URI when using native QUIC ({{QUIC}}).  It MUST
+NOT be used by the server, or when WebTransport is used.  When an AUTHORITY
+parameter is received from a server, or when an AUTHORITY parameter is received
+while WebTransport is used, or when an AUTHORITY parameter is received by a
+server but the server does not support the specified authority, the session MUST
+be closed with Invalid Authority.
+
+The AUTHORITY parameter follows the URI formatting rules {{!RFC3986}}.
+When connecting to a server using a URI with the "moqt" scheme, the
+client MUST set the AUTHORITY parameter to the `authority` portion of the
+URI. If an AUTHORITY parameter does not conform to
+these rules, the session MUST be closed with Malformed Authority.
 
 #### PATH {#path}
 
@@ -2689,7 +2715,7 @@ as defined below:
 
 * No Objects - No Objects exist between the requested Start and End Locations.
 
-* Invalid Joining Subscribe ID - The joining Fetch referenced a Request ID that
+* Invalid Joining Request ID - The joining Fetch referenced a Request ID that
   did not belong to an active Subscription.
 
 * Unknown Status in Range - The requested range contains objects with unknown
@@ -3095,9 +3121,9 @@ the datagram.
 |-----------|---------------------------------------------------|
 | ID        | Type                                              |
 |----------:|:--------------------------------------------------|
-| 0x00-0x03 | OBJECT_DATAGRAM ({{object-datagram}})             |
+| 0x00-0x07 | OBJECT_DATAGRAM ({{object-datagram}})             |
 |-----------|---------------------------------------------------|
-| 0x04-0x05 | OBJECT_DATAGRAM_STATUS ({{object-datagram}})      |
+| 0x20-0x21 | OBJECT_DATAGRAM_STATUS ({{object-datagram}})      |
 |-----------|---------------------------------------------------|
 
 An endpoint that receives an unknown stream or datagram type MUST close the
@@ -3258,10 +3284,10 @@ An `OBJECT_DATAGRAM` carries a single object in a datagram.
 
 ~~~
 OBJECT_DATAGRAM {
-  Type (i) = 0x0-0x4,
+  Type (i) = 0x0-0x7,
   Track Alias (i),
   Group ID (i),
-  Object ID (i),
+  [Object ID (i),]
   Publisher Priority (8),
   [Extension Headers Length (i),
   Extension headers (...)],
@@ -3270,20 +3296,28 @@ OBJECT_DATAGRAM {
 ~~~
 {: #object-datagram-format title="MOQT OBJECT_DATAGRAM"}
 
-There are 4 defined Type values for OBJECT_DATAGRAM:
+There are 8 defined Type values for OBJECT_DATAGRAM:
 
-|------|---------------|------------|
-| Type | End Of Group  | Extensions |
-|      |               | Present    |
-|------|---------------|------------|
-| 0x00 | No            | No         |
-|------|---------------|------------|
-| 0x01 | No            | Yes        |
-|------|---------------|------------|
-| 0x02 | Yes           | No         |
-|------|---------------|------------|
-| 0x03 | Yes           | Yes        |
-|------|---------------|------------|
+|------|---------------|------------|-----------|
+| Type | End Of Group  | Extensions | Object ID |
+|      |               | Present    | Present   |
+|------|---------------|------------|-----------|
+| 0x00 | No            | No         | Yes       |
+|------|---------------|------------|-----------|
+| 0x01 | No            | Yes        | Yes       |
+|------|---------------|------------|-----------|
+| 0x02 | Yes           | No         | Yes       |
+|------|---------------|------------|-----------|
+| 0x03 | Yes           | Yes        | Yes       |
+|------|---------------|------------|-----------|
+| 0x04 | No            | No         | No        |
+|------|---------------|------------|-----------|
+| 0x05 | No            | Yes        | No        |
+|------|---------------|------------|-----------|
+| 0x06 | Yes           | No         | No        |
+|------|---------------|------------|-----------|
+| 0x07 | Yes           | Yes        | No        |
+|------|---------------|------------|-----------|
 
 For Type values where End of Group is Yes, the Object is the last Object in the
 Group.
@@ -3293,6 +3327,10 @@ present and the Object has no extensions.  When Extensions Present is Yes,
 Extension Headers Length is present.  If an endpoint receives a datagram with
 Type 0x01 and Extension Headers Length is 0, it MUST close the session with
 Protocol Violation.
+
+For Type values where Object ID Present is No, the Object ID field is omitted
+and the Object ID is 0.  When Object ID Present is Yes, the Object ID field is
+present and encodes the Object ID.
 
 There is no explicit length field.  The entirety of the transport datagram
 following Publisher Priority contains the Object Payload.
@@ -3316,11 +3354,20 @@ OBJECT_DATAGRAM_STATUS {
 ~~~
 {: #object-datagram-status-format title="MOQT OBJECT_DATAGRAM_STATUS"}
 
-The Type field takes the form 0b0000001X (or the set of values from 0x02 to
-0x03). The LSB of the type determines if the Extensions Headers Length and
-Extension headers are present. If an endpoint receives a datagram with Type
-0x03 and Extension Headers Length is 0, it MUST close the session with Protocol
-Violation.
+There are 2 defined Type values for OBJECT_DATAGRAM_STATUS:
+
+|------|------------|
+| Type | Extensions |
+|      | Present    |
+|------|------------|
+| 0x20 | No         |
+|------|------------|
+| 0x21 | Yes        |
+|------|------------|
+
+The LSB of the type determines if the Extensions Headers Length and Extension
+headers are present. If an endpoint receives a datagram with Type 0x05 and
+Extension Headers Length is 0, it MUST close the session with Protocol Violation.
 
 ## Streams
 
@@ -3421,9 +3468,14 @@ following fields.
 
 The Object Status field is only sent if the Object Payload Length is zero.
 
+The Object ID Delta + 1 is added to the previous Object ID in the Subgroup
+stream if there was one.  The Object ID is the Object ID Delta if it's the
+first Object in the Subgroup stream. For example, a Subgroup of sequential
+Object IDs starting at 0 will have 0 for all Object ID Delta values.
+
 ~~~
 {
-  Object ID (i),
+  Object ID Delta (i),
   [Extension Headers Length (i),
   Extension headers (...)],
   Object Payload Length (i),
@@ -3433,8 +3485,6 @@ The Object Status field is only sent if the Object Payload Length is zero.
 ~~~
 {: #object-subgroup-format title="MOQT Subgroup Object Fields"}
 
-A publisher MUST NOT send an Object on a stream if its Object ID is less than a
-previously sent Object ID within a given group in that stream.
 
 ### Closing Subgroup Streams
 
@@ -3631,7 +3681,7 @@ SUBGROUP_HEADER {
   Publisher Priority = 0
 }
 {
-  Object ID = 0
+  Object ID Delta = 0 (Object ID is 0)
   Extension Headers Length = 33
     { Type = 4
       Value = 2186796243
@@ -3644,7 +3694,7 @@ SUBGROUP_HEADER {
   Payload = "abcd"
 }
 {
-  Object ID = 1
+  Object ID Delta = 0 (Object ID is 1)
   Extension Headers Length = 0
   Object Payload Length = 4
   Payload = "efgh"
